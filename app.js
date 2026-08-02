@@ -5,7 +5,7 @@
     const STORAGE_KEY = 'webgis_markers';
     const DEFAULT_CENTER = [0, 20];
     const DEFAULT_ZOOM = 2;
-    const MAP_STYLE = 'https://demotiles.maplibre.org/style.json';
+    const MAP_STYLE = 'https://tiles.openfreemap.org/styles/liberty';
 
     // ===== State =====
     let markers = [];          // Array of marker data objects
