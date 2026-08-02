@@ -6,14 +6,14 @@
     const DEFAULT_CENTER = [0, 20];
     const DEFAULT_ZOOM = 2;
     const MAP_STYLE = 'https://tiles.openfreemap.org/styles/liberty';
+    const SOURCE_ID = 'markers-source';
+    const LAYER_ID = 'markers-layer';
 
     // ===== State =====
     let markers = [];          // Array of marker data objects
-    let mapMarkers = {};       // MapLibre Marker instances keyed by id
     let activePopup = null;    // Currently open popup
-    let geoMarker = null;      // Geolocation marker
-    let geoWatchId = null;     // Geolocation watch ID
     let map = null;
+    let geoMarkerSource = null; // Geolocation marker source
 
     // ===== Initialize =====
     function init() {
@@ -44,6 +44,57 @@
         // Click to add marker
         map.on('click', function (e) {
             addMarker(e.lngLat.lng, e.lngLat.lat);
+        });
+
+        // Initialize source and layer when map loads
+        map.on('load', function() {
+            // Source for markers
+            map.addSource(SOURCE_ID, {
+                type: 'geojson',
+                data: {
+                    type: 'FeatureCollection',
+                    features: []
+                }
+            });
+
+            // Circle layer for markers
+            map.addLayer({
+                id: LAYER_ID,
+                type: 'circle',
+                source: SOURCE_ID,
+                paint: {
+                    'circle-radius': 8,
+                    'circle-color': '#FF6B35',
+                    'circle-stroke-width': 2,
+                    'circle-stroke-color': '#FFFFFF',
+                    'circle-opacity': 0.9
+                }
+            });
+
+            // Add hover effect
+            map.on('mouseenter', LAYER_ID, function() {
+                map.getCanvas().style.cursor = 'pointer';
+            });
+
+            map.on('mouseleave', LAYER_ID, function() {
+                map.getCanvas().style.cursor = '';
+            });
+
+            // Click on circle to open popup
+            map.on('click', LAYER_ID, function(e) {
+                if (e.features && e.features.length > 0) {
+                    var feature = e.features[0];
+                    if (feature.properties && feature.properties.id) {
+                        openPopup(feature.properties.id);
+                    }
+                }
+            });
+
+            // Load existing markers after source is ready
+            if (markers.length > 0) {
+                updateMapMarkers();
+                renderMarkerList();
+            }
         });
     }
 
@@ -76,67 +127,61 @@
         var existingIndex = markers.findIndex(function (m) { return m.id === id; });
         if (existingIndex > -1) {
             markers[existingIndex] = data;
-            removeMapMarker(id);
         } else {
             markers.push(data);
         }
 
-        createMapMarker(data);
+        updateMapMarkers();
         saveToStorage();
         renderMarkerList();
-        showToast('Marker added!', 'success');
+        showToast('نقطه اضافه شد!', 'success');
     }
 
-    function createMapMarker(data) {
-        // Create custom marker element
-        var el = document.createElement('div');
-        el.className = 'custom-marker';
-        el.innerHTML = '<div class="marker-pin"></div><div class="marker-dot"></div>';
-        el.title = 'Marker: ' + data.id;
+    function updateMapMarkers() {
+        if (!map || !map.getSource(SOURCE_ID)) return;
 
-        var marker = new maplibregl.Marker({
-            element: el,
-            anchor: 'bottom',
-            draggable: false
-        })
-            .setLngLat([data.lng, data.lat])
-            .addTo(map);
-
-        // Click handler on marker element to open popup
-        el.addEventListener('click', function (e) {
-            e.stopPropagation();
-            openPopup(data.id);
+        var features = markers.map(function(m) {
+            return {
+                type: 'Feature',
+                geometry: {
+                    type: 'Point',
+                    coordinates: [m.lng, m.lat]
+                },
+                properties: {
+                    id: m.id,
+                    notes: m.notes,
+                    createdAt: m.createdAt,
+                    createdAtDisplay: m.createdAtDisplay
+                }
+            };
         });
 
-        mapMarkers[data.id] = marker;
-    }
-
-    function removeMapMarker(id) {
-        if (mapMarkers[id]) {
-            mapMarkers[id].remove();
-            delete mapMarkers[id];
-        }
+        map.getSource(SOURCE_ID).setData({
+            type: 'FeatureCollection',
+            features: features
+        });
     }
 
     function deleteMarker(id) {
         markers = markers.filter(function (m) { return m.id !== id; });
-        removeMapMarker(id);
+        updateMapMarkers();
         if (activePopup) {
             activePopup.remove();
             activePopup = null;
         }
         saveToStorage();
         renderMarkerList();
-        showToast('Marker deleted', 'error');
+        showToast('نقطه حذف شد', 'error');
     }
 
     function updateMarkerNotes(id, notes) {
         var marker = markers.find(function (m) { return m.id === id; });
         if (marker) {
             marker.notes = notes;
+            updateMapMarkers();
             saveToStorage();
             renderMarkerList();
-            showToast('Notes saved!', 'success');
+            showToast('یادداشت ذخیره شد!', 'success');
         }
     }
 
@@ -154,15 +199,15 @@
         // Build popup HTML
         var html = '<div class="popup-content">' +
             '<div class="popup-header">' +
-            '<strong class="popup-title">📌 Marker</strong>' +
+            '<strong class="popup-title">📍 نقطه</strong>' +
             '<button class="popup-delete-btn" data-id="' + data.id + '" title="Delete marker">✕</button>' +
             '</div>' +
             '<div class="popup-date">🕐 ' + data.createdAtDisplay + '</div>' +
             '<div class="popup-coords">📐 ' + data.lat.toFixed(6) + ', ' + data.lng.toFixed(6) + '</div>' +
-            '<textarea class="popup-notes" data-id="' + data.id + '" placeholder="Write your notes here..." rows="4">' +
+            '<textarea class="popup-notes" data-id="' + data.id + '" placeholder="یادداشت خود را بنویسید..." rows="4">' +
             escapeHtml(data.notes) +
             '</textarea>' +
-            '<button class="popup-save-btn btn btn-primary btn-sm" data-id="' + data.id + '">Save Notes</button>' +
+            '<button class="popup-save-btn btn btn-primary btn-sm" data-id="' + data.id + '">ذخیره یادداشت</button>' +
             '</div>';
 
         var popup = new maplibregl.Popup({
@@ -187,7 +232,7 @@
                 deleteBtn.addEventListener('click', function (e) {
                     e.stopPropagation();
                     var markerId = this.getAttribute('data-id');
-                    if (confirm('Delete this marker?')) {
+                    if (confirm('آیا این نقطه حذف شود؟')) {
                         deleteMarker(markerId);
                     }
                 });
@@ -238,7 +283,7 @@
         countEl.textContent = markers.length;
 
         if (markers.length === 0) {
-            container.innerHTML = '<p class="empty-message">No markers yet. Click on the map to add one!</p>';
+            container.innerHTML = '<p class="empty-message">هنوز نقطه‌ای ثبت نشده. روی نقشه کلیک کنید تا یک نقطه اضافه کنید!</p>';
             return;
         }
 
@@ -249,12 +294,12 @@
 
         var html = '';
         sorted.forEach(function (m) {
-            var notesPreview = m.notes ? escapeHtml(m.notes) : 'No notes';
+            var notesPreview = m.notes ? escapeHtml(m.notes) : 'بدون یادداشت';
             var notesClass = m.notes ? 'item-notes' : 'item-notes empty';
 
             html += '<div class="marker-list-item" data-id="' + m.id + '">' +
                 '<div class="item-header">' +
-                '<span class="item-id">📌 ' + m.id.substring(0, 12) + '…</span>' +
+                '<span class="item-id">📍 ' + m.id.substring(0, 12) + '…</span>' +
                 '<span class="item-date">' + m.createdAtDisplay + '</span>' +
                 '</div>' +
                 '<div class="item-coords">' + m.lat.toFixed(4) + ', ' + m.lng.toFixed(4) + '</div>' +
@@ -280,7 +325,7 @@
             localStorage.setItem(STORAGE_KEY, JSON.stringify(markers));
         } catch (e) {
             console.error('Failed to save to localStorage:', e);
-            showToast('Failed to save data', 'error');
+            showToast('ذخیره داده با خطا مواجه شد', 'error');
         }
     }
 
@@ -290,14 +335,13 @@
             if (data) {
                 var parsed = JSON.parse(data);
                 if (Array.isArray(parsed)) {
-                    parsed.forEach(function (m) {
-                        markers.push(m);
-                        createMapMarker(m);
-                    });
+                    markers = parsed;
+                    if (map && map.getSource(SOURCE_ID)) {
+                        updateMapMarkers();
+                    }
                     renderMarkerList();
-
                     if (markers.length > 0) {
-                        showToast('Loaded ' + markers.length + ' marker(s)', 'success');
+                        showToast(markers.length + ' نقطه بارگذاری شد', 'success');
                     }
                 }
             } else {
@@ -312,11 +356,11 @@
     // ===== Geolocation =====
     function handleGeolocate() {
         if (!navigator.geolocation) {
-            showToast('Geolocation is not supported by your browser', 'error');
+            showToast('مرورگر شما از موقعیت‌یابی پشتیبانی نمی‌کند', 'error');
             return;
         }
 
-        showToast('Finding your location…', 'success');
+        showToast('در حال یافتن موقعیت شما…', 'success');
 
         navigator.geolocation.getCurrentPosition(
             function (position) {
@@ -324,22 +368,58 @@
                 var lat = position.coords.latitude;
                 var accuracy = position.coords.accuracy;
 
-                // Remove old geolocation marker
-                if (geoMarker) {
-                    geoMarker.remove();
+                // Add geolocation point to map
+                if (!map.getSource('geolocation-source')) {
+                    map.addSource('geolocation-source', {
+                        type: 'geojson',
+                        data: {
+                            type: 'FeatureCollection',
+                            features: []
+                        }
+                    });
+
+                    map.addLayer({
+                        id: 'geolocation-layer',
+                        type: 'circle',
+                        source: 'geolocation-source',
+                        paint: {
+                            'circle-radius': 12,
+                            'circle-color': '#00AAFF',
+                            'circle-stroke-width': 3,
+                            'circle-stroke-color': '#FFFFFF',
+                            'circle-opacity': 0.8
+                        }
+                    });
+
+                    // Add pulsing effect with second layer
+                    map.addLayer({
+                        id: 'geolocation-pulse',
+                        type: 'circle',
+                        source: 'geolocation-source',
+                        paint: {
+                            'circle-radius': 20,
+                            'circle-color': '#00AAFF',
+                            'circle-opacity': 0.3,
+                            'circle-stroke-width': 0
+                        }
+                    });
                 }
 
-                // Create geolocation marker element
-                var el = document.createElement('div');
-                el.className = 'geolocation-marker pulsing';
-                el.title = 'Your location (accuracy: ' + Math.round(accuracy) + 'm)';
+                var geoData = {
+                    type: 'FeatureCollection',
+                    features: [{
+                        type: 'Feature',
+                        geometry: {
+                            type: 'Point',
+                            coordinates: [lng, lat]
+                        },
+                        properties: {
+                            accuracy: accuracy
+                        }
+                    }]
+                };
 
-                geoMarker = new maplibregl.Marker({
-                    element: el,
-                    anchor: 'center'
-                })
-                    .setLngLat([lng, lat])
-                    .addTo(map);
+                map.getSource('geolocation-source').setData(geoData);
 
                 // Fly to location
                 map.flyTo({
@@ -348,15 +428,48 @@
                     duration: 2000
                 });
 
-                showToast('Location found! Accuracy: ' + Math.round(accuracy) + 'm', 'success');
+                showToast('موقعیت یافت شد! دقت: ' + Math.round(accuracy) + ' متر', 'success');
+
+                // Animate pulse
+                var pulseLayer = map.getLayer('geolocation-pulse');
+                if (pulseLayer) {
+                    var pulseRadius = 12;
+                    var pulseOpacity = 0.8;
+                    var growing = true;
+
+                    function animatePulse() {
+                        if (growing) {
+                            pulseRadius += 0.5;
+                            pulseOpacity -= 0.02;
+                            if (pulseRadius >= 28) {
+                                growing = false;
+                            }
+                        } else {
+                            pulseRadius -= 0.5;
+                            pulseOpacity += 0.02;
+                            if (pulseRadius <= 12) {
+                                growing = true;
+                            }
+                        }
+
+                        map.setPaintProperty('geolocation-pulse', 'circle-radius', pulseRadius);
+                        map.setPaintProperty('geolocation-pulse', 'circle-opacity', Math.max(0, Math.min(0.8, pulseOpacity)));
+
+                        if (map.getSource('geolocation-source')) {
+                            requestAnimationFrame(animatePulse);
+                        }
+                    }
+
+                    animatePulse();
+                }
             },
             function (error) {
                 var messages = {
-                    1: 'Location permission denied',
-                    2: 'Location unavailable',
-                    3: 'Location request timed out'
+                    1: 'دسترسی به موقعیت رد شد',
+                    2: 'موقعیت در دسترس نیست',
+                    3: 'درخواست موقعیت زمان‌بر شد'
                 };
-                showToast(messages[error.code] || 'Could not get location', 'error');
+                showToast(messages[error.code] || 'موقعیت یافت نشد', 'error');
             },
             {
                 enableHighAccuracy: true,
@@ -369,7 +482,7 @@
     // ===== Export GeoJSON =====
     function handleExport() {
         if (markers.length === 0) {
-            showToast('No markers to export', 'error');
+            showToast('نقطه‌ای برای خروجی وجود ندارد', 'error');
             return;
         }
 
@@ -404,7 +517,7 @@
         document.body.removeChild(link);
         URL.revokeObjectURL(url);
 
-        showToast('Exported ' + markers.length + ' marker(s) as GeoJSON', 'success');
+        showToast(markers.length + ' نقطه به صورت GeoJSON خروجی گرفته شد', 'success');
     }
 
     // ===== Import GeoJSON =====
@@ -418,7 +531,7 @@
                 var geojson = JSON.parse(e.target.result);
 
                 if (!geojson || geojson.type !== 'FeatureCollection' || !Array.isArray(geojson.features)) {
-                    showToast('Invalid GeoJSON: must be a FeatureCollection', 'error');
+                    showToast('GeoJSON نامعتبر: باید FeatureCollection باشد', 'error');
                     return;
                 }
 
@@ -448,9 +561,9 @@
                     }
                 });
 
-                var msg = 'Imported ' + importedCount + ' marker(s)';
+                var msg = importedCount + ' نقطه وارد شد';
                 if (skippedCount > 0) {
-                    msg += ' (' + skippedCount + ' non-point features skipped)';
+                    msg += ' (' + skippedCount + ' غیرنقطه نادیده گرفته شد)';
                 }
                 showToast(msg, 'success');
 
@@ -460,7 +573,7 @@
                 }
             } catch (err) {
                 console.error('Import error:', err);
-                showToast('Failed to parse GeoJSON file', 'error');
+                showToast('خطا در خواندن فایل GeoJSON', 'error');
             }
         };
 
@@ -473,30 +586,23 @@
     // ===== Clear All =====
     function handleClearAll() {
         if (markers.length === 0) {
-            showToast('No markers to clear', 'error');
+            showToast('نقطه‌ای برای پاک کردن وجود ندارد', 'error');
             return;
         }
 
-        if (!confirm('Are you sure you want to delete all ' + markers.length + ' marker(s)? This cannot be undone.')) {
+        if (!confirm('آیا از حذف همه ' + markers.length + ' نقطه مطمئنید؟ این عمل قابل بازگشت نیست.')) {
             return;
         }
 
-        // Remove all map markers
-        Object.keys(mapMarkers).forEach(function (id) {
-            mapMarkers[id].remove();
-        });
-        mapMarkers = {};
-
-        // Close popup
+        markers = [];
+        updateMapMarkers();
         if (activePopup) {
             activePopup.remove();
             activePopup = null;
         }
-
-        markers = [];
         saveToStorage();
         renderMarkerList();
-        showToast('All markers cleared', 'error');
+        showToast('همه نقاط پاک شدند', 'error');
     }
 
     // ===== Fit Map to Markers =====
