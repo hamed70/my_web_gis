@@ -1,9 +1,12 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="fa" dir="rtl">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Web GIS - Field Notes</title>
+    <title>یادداشت میدانی | نقشه مشهد</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=Vazirmatn:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
     <link rel="stylesheet" href="style.css">
 </head>
@@ -12,32 +15,53 @@
         <!-- Sidebar -->
         <aside id="sidebar">
             <div class="sidebar-header">
-                <h1>🗺️ Field Notes</h1>
-                <p class="subtitle">Click the map to add markers</p>
+                <h1><span class="logo-mark">◈</span> یادداشت میدانی</h1>
+                <p class="subtitle">روی نقشه کلیک کنید تا یک نقطه ثبت شود</p>
             </div>
 
-            <div class="sidebar-actions">
-                <button id="btn-geolocate" class="btn btn-primary" title="Find my location">
-                    <span class="btn-icon">📍</span> My Location
-                </button>
-                <button id="btn-export" class="btn btn-success" title="Export as GeoJSON">
-                    <span class="btn-icon">💾</span> Export GeoJSON
-                </button>
-                <label class="btn btn-info import-label" title="Import GeoJSON file">
-                    <span class="btn-icon">📂</span> Import GeoJSON
-                    <input type="file" id="btn-import" accept=".geojson,.json" hidden>
-                </label>
-                <button id="btn-clear-all" class="btn btn-danger" title="Remove all markers">
-                    <span class="btn-icon">🗑️</span> Clear All
-                </button>
-            </div>
+            <div class="sidebar-scroll">
 
-            <div class="sidebar-stats">
-                <span id="marker-count">0</span> marker(s) saved
-            </div>
+                <div class="sidebar-section sidebar-actions">
+                    <button id="btn-geolocate" class="btn btn-primary" title="یافتن موقعیت من">
+                        <span class="btn-icon">◎</span> موقعیت من
+                    </button>
+                    <button id="btn-export" class="btn btn-success" title="خروجی GeoJSON">
+                        <span class="btn-icon">⇩</span> خروجی GeoJSON
+                    </button>
+                    <label class="btn btn-teal import-label" title="ورودی GeoJSON">
+                        <span class="btn-icon">⇧</span> ورودی GeoJSON
+                        <input type="file" id="btn-import" accept=".geojson,.json" hidden>
+                    </label>
+                    <button id="btn-clear-all" class="btn btn-danger" title="حذف همه نقاط">
+                        <span class="btn-icon">⨯</span> پاک کردن همه
+                    </button>
+                </div>
 
-            <div id="marker-list" class="marker-list">
-                <p class="empty-message">No markers yet. Click on the map to add one!</p>
+                <div class="sidebar-section layers-section">
+                    <div class="section-title">
+                        <span>لایه‌ها</span>
+                        <span class="section-hint">برای فعال‌سازی، روی لایه بزنید</span>
+                    </div>
+                    <div id="layers-list" class="layers-list"></div>
+
+                    <div id="add-layer-form" class="add-layer-form" hidden>
+                        <input type="text" id="new-layer-name" class="layer-input" placeholder="نام لایه، مثلاً «خانواده»" maxlength="24">
+                        <input type="color" id="new-layer-color" class="layer-color-input" value="#79c26f" title="رنگ لایه">
+                        <div class="add-layer-buttons">
+                            <button id="confirm-add-layer" class="btn btn-primary btn-sm">افزودن</button>
+                            <button id="cancel-add-layer" class="btn btn-ghost btn-sm">انصراف</button>
+                        </div>
+                    </div>
+                    <button id="btn-add-layer" class="btn btn-outline btn-sm btn-full">+ لایه جدید</button>
+                </div>
+
+                <div class="sidebar-stats">
+                    <span id="marker-count">0</span> نقطه ثبت شده
+                </div>
+
+                <div id="marker-list" class="marker-list">
+                    <p class="empty-message">هنوز نقطه‌ای ثبت نشده. روی نقشه کلیک کنید تا یک نقطه اضافه کنید!</p>
+                </div>
             </div>
         </aside>
 
@@ -45,22 +69,10 @@
         <div id="map-container">
             <div id="map"></div>
             <div id="coordinates-display" class="map-overlay">
-                Lat: <span id="coord-lat">--</span>, Lng: <span id="coord-lng">--</span>
+                <span class="coord-label">Lat</span> <span id="coord-lat">--</span>
+                <span class="coord-sep">/</span>
+                <span class="coord-label">Lng</span> <span id="coord-lng">--</span>
             </div>
-        </div>
-    </div>
-
-    <!-- Popup Template (used by MapLibre) -->
-    <div id="popup-template" style="display:none;">
-        <div class="popup-content">
-            <div class="popup-header">
-                <strong class="popup-title">📌 Marker</strong>
-                <button class="popup-delete-btn" title="Delete marker">✕</button>
-            </div>
-            <div class="popup-date"></div>
-            <div class="popup-coords"></div>
-            <textarea class="popup-notes" placeholder="Write your notes here..." rows="4"></textarea>
-            <button class="popup-save-btn btn btn-primary btn-sm">Save Notes</button>
         </div>
     </div>
 
