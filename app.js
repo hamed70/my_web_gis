@@ -2,24 +2,41 @@
     'use strict';
 
     // ===== Constants =====
-    const STORAGE_KEY = 'webgis_markers';
-    const DEFAULT_CENTER = [0, 20];
-    const DEFAULT_ZOOM = 2;
-    const MAP_STYLE = 'https://tiles.openfreemap.org/styles/liberty';
-    const SOURCE_ID = 'markers-source';
-    const LAYER_ID = 'markers-layer';
+    var STORAGE_KEY_MARKERS = 'webgis_markers';
+    var STORAGE_KEY_LAYERS = 'webgis_layers';
+    var STORAGE_KEY_ACTIVE_LAYER = 'webgis_active_layer';
+
+    // Default view: Mashhad, Iran
+    var DEFAULT_CENTER = [59.6042, 36.2972];
+    var DEFAULT_ZOOM = 12;
+
+    var MAP_STYLE = 'https://tiles.openfreemap.org/styles/liberty';
+    var SOURCE_ID = 'markers-source';
+    var LAYER_ID = 'markers-layer';
+
+    var FALLBACK_COLOR = '#8fa3ac';
+    var LAYER_PALETTE = ['#e2a13d', '#4fb0c6', '#5fa88f', '#c76b98', '#8f7fe8', '#e2584f', '#79c26f', '#cf9a4c'];
+
+    var DEFAULT_LAYERS = [
+        { id: 'personal', name: 'شخصی', color: '#e2a13d', visible: true },
+        { id: 'friends', name: 'دوستان', color: '#4fb0c6', visible: true }
+    ];
 
     // ===== State =====
-    let markers = [];          // Array of marker data objects
-    let activePopup = null;    // Currently open popup
-    let map = null;
-    let geoMarkerSource = null; // Geolocation marker source
+    var markers = [];          // Array of marker data objects
+    var layers = [];           // Array of layer definitions
+    var activeLayerId = null;  // Layer used for newly created markers
+    var activePopup = null;    // Currently open popup
+    var map = null;
 
     // ===== Initialize =====
     function init() {
+        loadLayers();
+        loadMarkersFromStorage();
         initMap();
-        loadFromStorage();
         bindEvents();
+        renderLayers();
+        renderMarkerList();
     }
 
     // ===== Map Initialization =====
@@ -32,8 +49,8 @@
             attributionControl: true
         });
 
-        map.addControl(new maplibregl.NavigationControl(), 'top-right');
-        map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-right');
+        map.addControl(new maplibregl.NavigationControl(), 'top-left');
+        map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-left');
 
         // Track mouse coordinates
         map.on('mousemove', function (e) {
@@ -41,47 +58,50 @@
             document.getElementById('coord-lng').textContent = e.lngLat.lng.toFixed(6);
         });
 
-        // Click to add marker
+        // Click on empty map area to add a marker.
+        // Fix: if the click actually landed on an existing marker feature,
+        // do nothing here — the dedicated layer click handler below will
+        // open that marker's popup instead of also creating a new point.
         map.on('click', function (e) {
+            if (map.getLayer(LAYER_ID)) {
+                var hit = map.queryRenderedFeatures(e.point, { layers: [LAYER_ID] });
+                if (hit && hit.length > 0) {
+                    return;
+                }
+            }
             addMarker(e.lngLat.lng, e.lngLat.lat);
         });
 
         // Initialize source and layer when map loads
-        map.on('load', function() {
-            // Source for markers
+        map.on('load', function () {
             map.addSource(SOURCE_ID, {
                 type: 'geojson',
-                data: {
-                    type: 'FeatureCollection',
-                    features: []
-                }
+                data: { type: 'FeatureCollection', features: [] }
             });
 
-            // Circle layer for markers
             map.addLayer({
                 id: LAYER_ID,
                 type: 'circle',
                 source: SOURCE_ID,
                 paint: {
-                    'circle-radius': 8,
-                    'circle-color': '#FF6B35',
+                    'circle-radius': ['case', ['boolean', ['feature-state', 'hover'], false], 10, 8],
+                    'circle-color': FALLBACK_COLOR,
                     'circle-stroke-width': 2,
-                    'circle-stroke-color': '#FFFFFF',
-                    'circle-opacity': 0.9
+                    'circle-stroke-color': '#ffffff',
+                    'circle-opacity': 0.95
                 }
             });
 
-            // Add hover effect
-            map.on('mouseenter', LAYER_ID, function() {
+            map.on('mouseenter', LAYER_ID, function () {
                 map.getCanvas().style.cursor = 'pointer';
             });
 
-            map.on('mouseleave', LAYER_ID, function() {
+            map.on('mouseleave', LAYER_ID, function () {
                 map.getCanvas().style.cursor = '';
             });
 
-            // Click on circle to open popup
-            map.on('click', LAYER_ID, function(e) {
+            // Click on a marker circle opens its popup
+            map.on('click', LAYER_ID, function (e) {
                 if (e.features && e.features.length > 0) {
                     var feature = e.features[0];
                     if (feature.properties && feature.properties.id) {
@@ -90,11 +110,8 @@
                 }
             });
 
-            // Load existing markers after source is ready
-            if (markers.length > 0) {
-                updateMapMarkers();
-                renderMarkerList();
-            }
+            updateLayerStyle();
+            updateMapMarkers();
         });
     }
 
@@ -104,6 +121,209 @@
         document.getElementById('btn-export').addEventListener('click', handleExport);
         document.getElementById('btn-import').addEventListener('change', handleImport);
         document.getElementById('btn-clear-all').addEventListener('click', handleClearAll);
+
+        document.getElementById('btn-add-layer').addEventListener('click', function () {
+            var form = document.getElementById('add-layer-form');
+            form.hidden = false;
+            document.getElementById('btn-add-layer').hidden = true;
+            document.getElementById('new-layer-color').value = LAYER_PALETTE[layers.length % LAYER_PALETTE.length];
+            document.getElementById('new-layer-name').focus();
+        });
+
+        document.getElementById('cancel-add-layer').addEventListener('click', function () {
+            hideAddLayerForm();
+        });
+
+        document.getElementById('confirm-add-layer').addEventListener('click', handleAddLayer);
+
+        document.getElementById('new-layer-name').addEventListener('keydown', function (e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                handleAddLayer();
+            }
+        });
+    }
+
+    function hideAddLayerForm() {
+        document.getElementById('add-layer-form').hidden = true;
+        document.getElementById('btn-add-layer').hidden = false;
+        document.getElementById('new-layer-name').value = '';
+    }
+
+    function handleAddLayer() {
+        var nameInput = document.getElementById('new-layer-name');
+        var colorInput = document.getElementById('new-layer-color');
+        var name = nameInput.value.trim();
+
+        if (!name) {
+            showToast('یک نام برای لایه وارد کنید', 'error');
+            nameInput.focus();
+            return;
+        }
+
+        var id = addLayer(name, colorInput.value);
+        setActiveLayer(id);
+        hideAddLayerForm();
+        showToast('لایه «' + name + '» اضافه شد', 'success');
+    }
+
+    // ===== Layer Management =====
+    function generateLayerId() {
+        return 'layer_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+    }
+
+    function getLayerById(id) {
+        return layers.find(function (l) { return l.id === id; });
+    }
+
+    function addLayer(name, color) {
+        var id = generateLayerId();
+        layers.push({
+            id: id,
+            name: name,
+            color: color || LAYER_PALETTE[layers.length % LAYER_PALETTE.length],
+            visible: true
+        });
+        saveLayers();
+        updateLayerStyle();
+        renderLayers();
+        return id;
+    }
+
+    // Used on import: reuse an existing layer by name, or create one on the fly
+    function ensureLayerExists(layerId, layerName) {
+        if (layerId) {
+            var existing = getLayerById(layerId);
+            if (existing) return existing.id;
+        }
+        if (layerName) {
+            var byName = layers.find(function (l) { return l.name === layerName; });
+            if (byName) return byName.id;
+        }
+        var newId = layerId || generateLayerId();
+        layers.push({
+            id: newId,
+            name: layerName || 'وارد شده',
+            color: LAYER_PALETTE[layers.length % LAYER_PALETTE.length],
+            visible: true
+        });
+        saveLayers();
+        return newId;
+    }
+
+    function setActiveLayer(id) {
+        if (!getLayerById(id)) return;
+        activeLayerId = id;
+        saveActiveLayer();
+        renderLayers();
+    }
+
+    function toggleLayerVisibility(id) {
+        var layer = getLayerById(id);
+        if (!layer) return;
+        layer.visible = !layer.visible;
+        saveLayers();
+        updateLayerStyle();
+        renderLayers();
+        renderMarkerList();
+    }
+
+    function deleteLayer(id) {
+        if (layers.length <= 1) {
+            showToast('حداقل یک لایه باید باقی بماند', 'error');
+            return;
+        }
+        var layer = getLayerById(id);
+        if (!layer) return;
+
+        var count = markers.filter(function (m) { return m.layerId === id; }).length;
+        var msg = 'لایه «' + layer.name + '» حذف شود؟';
+        if (count > 0) {
+            msg += ' ' + count + ' نقطه این لایه هم حذف خواهد شد.';
+        }
+        if (!confirm(msg)) return;
+
+        markers = markers.filter(function (m) { return m.layerId !== id; });
+        layers = layers.filter(function (l) { return l.id !== id; });
+
+        if (activeLayerId === id) {
+            activeLayerId = layers[0].id;
+            saveActiveLayer();
+        }
+
+        saveLayers();
+        saveMarkersToStorage();
+        updateLayerStyle();
+        updateMapMarkers();
+        renderLayers();
+        renderMarkerList();
+        showToast('لایه حذف شد', 'error');
+    }
+
+    function buildColorExpression() {
+        var expr = ['match', ['get', 'layerId']];
+        layers.forEach(function (l) {
+            expr.push(l.id, l.color);
+        });
+        expr.push(FALLBACK_COLOR);
+        return expr;
+    }
+
+    function getVisibleLayerIds() {
+        return layers.filter(function (l) { return l.visible; }).map(function (l) { return l.id; });
+    }
+
+    function updateLayerStyle() {
+        if (!map || !map.getLayer(LAYER_ID)) return;
+        map.setPaintProperty(LAYER_ID, 'circle-color', buildColorExpression());
+        map.setFilter(LAYER_ID, ['in', ['get', 'layerId'], ['literal', getVisibleLayerIds()]]);
+    }
+
+    function renderLayers() {
+        var container = document.getElementById('layers-list');
+        var html = '';
+
+        layers.forEach(function (l) {
+            var count = markers.filter(function (m) { return m.layerId === l.id; }).length;
+            var classes = 'layer-item';
+            if (l.id === activeLayerId) classes += ' active';
+            if (!l.visible) classes += ' hidden-layer';
+
+            html += '<div class="' + classes + '" data-id="' + l.id + '" style="--layer-color:' + l.color + '">' +
+                '<span class="layer-color-dot"></span>' +
+                '<span class="layer-name">' + escapeHtml(l.name) + '</span>' +
+                (l.id === activeLayerId ? '<span class="layer-active-tag">فعال</span>' : '') +
+                '<span class="layer-count">' + count + '</span>' +
+                '<button class="layer-icon-btn layer-visibility-btn" data-id="' + l.id + '" title="نمایش/عدم نمایش لایه">' + (l.visible ? '👁' : '🚫') + '</button>' +
+                (layers.length > 1 ? '<button class="layer-icon-btn layer-delete-btn" data-id="' + l.id + '" title="حذف لایه">✕</button>' : '') +
+                '</div>';
+        });
+
+        container.innerHTML = html;
+
+        var items = container.querySelectorAll('.layer-item');
+        items.forEach(function (item) {
+            item.addEventListener('click', function (e) {
+                if (e.target.closest('.layer-icon-btn')) return;
+                setActiveLayer(this.getAttribute('data-id'));
+            });
+        });
+
+        var visBtns = container.querySelectorAll('.layer-visibility-btn');
+        visBtns.forEach(function (btn) {
+            btn.addEventListener('click', function (e) {
+                e.stopPropagation();
+                toggleLayerVisibility(this.getAttribute('data-id'));
+            });
+        });
+
+        var delBtns = container.querySelectorAll('.layer-delete-btn');
+        delBtns.forEach(function (btn) {
+            btn.addEventListener('click', function (e) {
+                e.stopPropagation();
+                deleteLayer(this.getAttribute('data-id'));
+            });
+        });
     }
 
     // ===== Marker Management =====
@@ -114,16 +334,18 @@
     function addMarker(lng, lat, properties) {
         var id = (properties && properties.id) || generateId();
         var now = new Date();
+        var layerId = (properties && ensureLayerExists(properties.layerId, properties.layerName)) || activeLayerId;
+
         var data = {
             id: id,
             lng: lng,
             lat: lat,
             notes: (properties && properties.notes) || '',
+            layerId: layerId,
             createdAt: (properties && properties.createdAt) || now.toISOString(),
             createdAtDisplay: (properties && properties.createdAtDisplay) || formatDate(now)
         };
 
-        // Avoid duplicate IDs on import
         var existingIndex = markers.findIndex(function (m) { return m.id === id; });
         if (existingIndex > -1) {
             markers[existingIndex] = data;
@@ -132,34 +354,30 @@
         }
 
         updateMapMarkers();
-        saveToStorage();
+        saveMarkersToStorage();
         renderMarkerList();
+        renderLayers();
         showToast('نقطه اضافه شد!', 'success');
     }
 
     function updateMapMarkers() {
         if (!map || !map.getSource(SOURCE_ID)) return;
 
-        var features = markers.map(function(m) {
+        var features = markers.map(function (m) {
             return {
                 type: 'Feature',
-                geometry: {
-                    type: 'Point',
-                    coordinates: [m.lng, m.lat]
-                },
+                geometry: { type: 'Point', coordinates: [m.lng, m.lat] },
                 properties: {
                     id: m.id,
                     notes: m.notes,
+                    layerId: m.layerId,
                     createdAt: m.createdAt,
                     createdAtDisplay: m.createdAtDisplay
                 }
             };
         });
 
-        map.getSource(SOURCE_ID).setData({
-            type: 'FeatureCollection',
-            features: features
-        });
+        map.getSource(SOURCE_ID).setData({ type: 'FeatureCollection', features: features });
     }
 
     function deleteMarker(id) {
@@ -169,8 +387,9 @@
             activePopup.remove();
             activePopup = null;
         }
-        saveToStorage();
+        saveMarkersToStorage();
         renderMarkerList();
+        renderLayers();
         showToast('نقطه حذف شد', 'error');
     }
 
@@ -179,7 +398,7 @@
         if (marker) {
             marker.notes = notes;
             updateMapMarkers();
-            saveToStorage();
+            saveMarkersToStorage();
             renderMarkerList();
             showToast('یادداشت ذخیره شد!', 'success');
         }
@@ -190,24 +409,28 @@
         var data = markers.find(function (m) { return m.id === id; });
         if (!data) return;
 
-        // Close any open popup
+        // Close any open popup first
         if (activePopup) {
             activePopup.remove();
             activePopup = null;
         }
 
-        // Build popup HTML
+        var layer = getLayerById(data.layerId) || layers[0];
+
         var html = '<div class="popup-content">' +
             '<div class="popup-header">' +
-            '<strong class="popup-title">📍 نقطه</strong>' +
-            '<button class="popup-delete-btn" data-id="' + data.id + '" title="Delete marker">✕</button>' +
+            '<strong class="popup-title"><span class="popup-layer-dot" style="--layer-color:' + layer.color + '"></span> نقطه</strong>' +
             '</div>' +
             '<div class="popup-date">🕐 ' + data.createdAtDisplay + '</div>' +
-            '<div class="popup-coords">📐 ' + data.lat.toFixed(6) + ', ' + data.lng.toFixed(6) + '</div>' +
+            '<div class="popup-coords">' + data.lat.toFixed(6) + ', ' + data.lng.toFixed(6) + '</div>' +
+            '<div class="popup-layer-name">لایه: ' + escapeHtml(layer.name) + '</div>' +
             '<textarea class="popup-notes" data-id="' + data.id + '" placeholder="یادداشت خود را بنویسید..." rows="4">' +
             escapeHtml(data.notes) +
             '</textarea>' +
+            '<div class="popup-actions">' +
             '<button class="popup-save-btn btn btn-primary btn-sm" data-id="' + data.id + '">ذخیره یادداشت</button>' +
+            '<button class="popup-delete-btn btn btn-danger btn-sm" data-id="' + data.id + '" title="حذف نقطه">حذف</button>' +
+            '</div>' +
             '</div>';
 
         var popup = new maplibregl.Popup({
@@ -222,7 +445,13 @@
 
         activePopup = popup;
 
-        // After DOM is ready, attach event listeners
+        // Keep state in sync however the popup gets closed (X button, delete, etc.)
+        popup.on('close', function () {
+            if (activePopup === popup) {
+                activePopup = null;
+            }
+        });
+
         setTimeout(function () {
             var popupEl = popup.getElement();
             if (!popupEl) return;
@@ -250,7 +479,6 @@
                 });
             }
 
-            // Save on Enter (Ctrl+Enter to allow newlines)
             var textarea = popupEl.querySelector('.popup-notes');
             if (textarea) {
                 textarea.addEventListener('keydown', function (e) {
@@ -260,17 +488,15 @@
                         updateMarkerNotes(markerId, this.value);
                     }
                 });
-                // Prevent map click when clicking textarea
                 textarea.addEventListener('click', function (e) {
                     e.stopPropagation();
                 });
             }
         }, 50);
 
-        // Fly to marker
         map.flyTo({
             center: [data.lng, data.lat],
-            zoom: Math.max(map.getZoom(), 8),
+            zoom: Math.max(map.getZoom(), 14),
             duration: 800
         });
     }
@@ -287,8 +513,15 @@
             return;
         }
 
-        // Sort by newest first
-        var sorted = markers.slice().sort(function (a, b) {
+        var visibleIds = getVisibleLayerIds();
+        var visibleMarkers = markers.filter(function (m) { return visibleIds.indexOf(m.layerId) > -1; });
+
+        if (visibleMarkers.length === 0) {
+            container.innerHTML = '<p class="empty-message">همه لایه‌ها مخفی هستند. یک لایه را نمایان کنید.</p>';
+            return;
+        }
+
+        var sorted = visibleMarkers.slice().sort(function (a, b) {
             return new Date(b.createdAt) - new Date(a.createdAt);
         });
 
@@ -296,20 +529,22 @@
         sorted.forEach(function (m) {
             var notesPreview = m.notes ? escapeHtml(m.notes) : 'بدون یادداشت';
             var notesClass = m.notes ? 'item-notes' : 'item-notes empty';
+            var layer = getLayerById(m.layerId);
+            var color = layer ? layer.color : FALLBACK_COLOR;
+            var layerName = layer ? layer.name : '';
 
-            html += '<div class="marker-list-item" data-id="' + m.id + '">' +
+            html += '<div class="marker-list-item" data-id="' + m.id + '" style="--item-color:' + color + '">' +
                 '<div class="item-header">' +
-                '<span class="item-id">📍 ' + m.id.substring(0, 12) + '…</span>' +
+                '<span class="item-id">' + m.id.substring(0, 10) + '…</span>' +
                 '<span class="item-date">' + m.createdAtDisplay + '</span>' +
                 '</div>' +
-                '<div class="item-coords">' + m.lat.toFixed(4) + ', ' + m.lng.toFixed(4) + '</div>' +
+                '<div class="item-coords">' + m.lat.toFixed(4) + ', ' + m.lng.toFixed(4) + ' · ' + escapeHtml(layerName) + '</div>' +
                 '<div class="' + notesClass + '">' + notesPreview + '</div>' +
                 '</div>';
         });
 
         container.innerHTML = html;
 
-        // Attach click events to list items
         var items = container.querySelectorAll('.marker-list-item');
         items.forEach(function (item) {
             item.addEventListener('click', function () {
@@ -320,36 +555,78 @@
     }
 
     // ===== Local Storage =====
-    function saveToStorage() {
+    function saveMarkersToStorage() {
         try {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(markers));
+            localStorage.setItem(STORAGE_KEY_MARKERS, JSON.stringify(markers));
         } catch (e) {
-            console.error('Failed to save to localStorage:', e);
+            console.error('Failed to save markers to localStorage:', e);
             showToast('ذخیره داده با خطا مواجه شد', 'error');
         }
     }
 
-    function loadFromStorage() {
+    function loadMarkersFromStorage() {
         try {
-            var data = localStorage.getItem(STORAGE_KEY);
+            var data = localStorage.getItem(STORAGE_KEY_MARKERS);
             if (data) {
                 var parsed = JSON.parse(data);
                 if (Array.isArray(parsed)) {
-                    markers = parsed;
-                    if (map && map.getSource(SOURCE_ID)) {
-                        updateMapMarkers();
-                    }
-                    renderMarkerList();
-                    if (markers.length > 0) {
-                        showToast(markers.length + ' نقطه بارگذاری شد', 'success');
-                    }
+                    markers = parsed.map(function (m) {
+                        if (!m.layerId) m.layerId = activeLayerId;
+                        return m;
+                    });
                 }
-            } else {
-                renderMarkerList();
             }
         } catch (e) {
-            console.error('Failed to load from localStorage:', e);
-            renderMarkerList();
+            console.error('Failed to load markers from localStorage:', e);
+        }
+    }
+
+    function saveLayers() {
+        try {
+            localStorage.setItem(STORAGE_KEY_LAYERS, JSON.stringify(layers));
+        } catch (e) {
+            console.error('Failed to save layers to localStorage:', e);
+        }
+    }
+
+    function saveActiveLayer() {
+        try {
+            localStorage.setItem(STORAGE_KEY_ACTIVE_LAYER, activeLayerId);
+        } catch (e) {
+            console.error('Failed to save active layer:', e);
+        }
+    }
+
+    function loadLayers() {
+        try {
+            var data = localStorage.getItem(STORAGE_KEY_LAYERS);
+            if (data) {
+                var parsed = JSON.parse(data);
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                    layers = parsed;
+                }
+            }
+        } catch (e) {
+            console.error('Failed to load layers from localStorage:', e);
+        }
+
+        if (layers.length === 0) {
+            layers = DEFAULT_LAYERS.map(function (l) { return Object.assign({}, l); });
+            saveLayers();
+        }
+
+        var storedActive = null;
+        try {
+            storedActive = localStorage.getItem(STORAGE_KEY_ACTIVE_LAYER);
+        } catch (e) {
+            storedActive = null;
+        }
+
+        if (storedActive && getLayerById(storedActive)) {
+            activeLayerId = storedActive;
+        } else {
+            activeLayerId = layers[0].id;
+            saveActiveLayer();
         }
     }
 
@@ -368,14 +645,10 @@
                 var lat = position.coords.latitude;
                 var accuracy = position.coords.accuracy;
 
-                // Add geolocation point to map
                 if (!map.getSource('geolocation-source')) {
                     map.addSource('geolocation-source', {
                         type: 'geojson',
-                        data: {
-                            type: 'FeatureCollection',
-                            features: []
-                        }
+                        data: { type: 'FeatureCollection', features: [] }
                     });
 
                     map.addLayer({
@@ -384,21 +657,20 @@
                         source: 'geolocation-source',
                         paint: {
                             'circle-radius': 12,
-                            'circle-color': '#00AAFF',
+                            'circle-color': '#4fb0c6',
                             'circle-stroke-width': 3,
-                            'circle-stroke-color': '#FFFFFF',
-                            'circle-opacity': 0.8
+                            'circle-stroke-color': '#ffffff',
+                            'circle-opacity': 0.85
                         }
                     });
 
-                    // Add pulsing effect with second layer
                     map.addLayer({
                         id: 'geolocation-pulse',
                         type: 'circle',
                         source: 'geolocation-source',
                         paint: {
                             'circle-radius': 20,
-                            'circle-color': '#00AAFF',
+                            'circle-color': '#4fb0c6',
                             'circle-opacity': 0.3,
                             'circle-stroke-width': 0
                         }
@@ -409,28 +681,17 @@
                     type: 'FeatureCollection',
                     features: [{
                         type: 'Feature',
-                        geometry: {
-                            type: 'Point',
-                            coordinates: [lng, lat]
-                        },
-                        properties: {
-                            accuracy: accuracy
-                        }
+                        geometry: { type: 'Point', coordinates: [lng, lat] },
+                        properties: { accuracy: accuracy }
                     }]
                 };
 
                 map.getSource('geolocation-source').setData(geoData);
 
-                // Fly to location
-                map.flyTo({
-                    center: [lng, lat],
-                    zoom: 15,
-                    duration: 2000
-                });
+                map.flyTo({ center: [lng, lat], zoom: 15, duration: 2000 });
 
                 showToast('موقعیت یافت شد! دقت: ' + Math.round(accuracy) + ' متر', 'success');
 
-                // Animate pulse
                 var pulseLayer = map.getLayer('geolocation-pulse');
                 if (pulseLayer) {
                     var pulseRadius = 12;
@@ -441,15 +702,11 @@
                         if (growing) {
                             pulseRadius += 0.5;
                             pulseOpacity -= 0.02;
-                            if (pulseRadius >= 28) {
-                                growing = false;
-                            }
+                            if (pulseRadius >= 28) growing = false;
                         } else {
                             pulseRadius -= 0.5;
                             pulseOpacity += 0.02;
-                            if (pulseRadius <= 12) {
-                                growing = true;
-                            }
+                            if (pulseRadius <= 12) growing = true;
                         }
 
                         map.setPaintProperty('geolocation-pulse', 'circle-radius', pulseRadius);
@@ -471,11 +728,7 @@
                 };
                 showToast(messages[error.code] || 'موقعیت یافت نشد', 'error');
             },
-            {
-                enableHighAccuracy: true,
-                timeout: 10000,
-                maximumAge: 60000
-            }
+            { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
         );
     }
 
@@ -489,15 +742,16 @@
         var geojson = {
             type: 'FeatureCollection',
             features: markers.map(function (m) {
+                var layer = getLayerById(m.layerId);
                 return {
                     type: 'Feature',
-                    geometry: {
-                        type: 'Point',
-                        coordinates: [m.lng, m.lat]
-                    },
+                    geometry: { type: 'Point', coordinates: [m.lng, m.lat] },
                     properties: {
                         id: m.id,
                         notes: m.notes,
+                        layerId: m.layerId,
+                        layerName: layer ? layer.name : '',
+                        layerColor: layer ? layer.color : FALLBACK_COLOR,
                         createdAt: m.createdAt,
                         createdAtDisplay: m.createdAtDisplay
                     }
@@ -511,7 +765,7 @@
 
         var link = document.createElement('a');
         link.href = url;
-        link.download = 'field_notes_' + new Date().toISOString().slice(0, 10) + '.geojson';
+        link.download = 'field_notes_mashhad_' + new Date().toISOString().slice(0, 10) + '.geojson';
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
@@ -552,6 +806,8 @@
                         addMarker(coords[0], coords[1], {
                             id: props.id || generateId(),
                             notes: props.notes || '',
+                            layerId: props.layerId || null,
+                            layerName: props.layerName || null,
                             createdAt: props.createdAt || new Date().toISOString(),
                             createdAtDisplay: props.createdAtDisplay || formatDate(new Date(props.createdAt || Date.now()))
                         });
@@ -567,7 +823,6 @@
                 }
                 showToast(msg, 'success');
 
-                // Fit map to imported markers if any
                 if (importedCount > 0 && markers.length > 0) {
                     fitMapToMarkers();
                 }
@@ -578,8 +833,6 @@
         };
 
         reader.readAsText(file);
-
-        // Reset file input so the same file can be imported again
         event.target.value = '';
     }
 
@@ -590,7 +843,7 @@
             return;
         }
 
-        if (!confirm('آیا از حذف همه ' + markers.length + ' نقطه مطمئنید؟ این عمل قابل بازگشت نیست.')) {
+        if (!confirm('آیا از حذف همه ' + markers.length + ' نقطه (در همه لایه‌ها) مطمئنید؟ این عمل قابل بازگشت نیست.')) {
             return;
         }
 
@@ -600,8 +853,9 @@
             activePopup.remove();
             activePopup = null;
         }
-        saveToStorage();
+        saveMarkersToStorage();
         renderMarkerList();
+        renderLayers();
         showToast('همه نقاط پاک شدند', 'error');
     }
 
@@ -610,11 +864,7 @@
         if (markers.length === 0) return;
 
         if (markers.length === 1) {
-            map.flyTo({
-                center: [markers[0].lng, markers[0].lat],
-                zoom: 10,
-                duration: 1500
-            });
+            map.flyTo({ center: [markers[0].lng, markers[0].lat], zoom: 12, duration: 1500 });
             return;
         }
 
@@ -623,11 +873,7 @@
             bounds.extend([m.lng, m.lat]);
         });
 
-        map.fitBounds(bounds, {
-            padding: 80,
-            duration: 1500,
-            maxZoom: 16
-        });
+        map.fitBounds(bounds, { padding: 80, duration: 1500, maxZoom: 16 });
     }
 
     // ===== Utility Functions =====
@@ -649,7 +895,6 @@
     }
 
     function showToast(message, type) {
-        // Remove existing toasts
         var existing = document.querySelectorAll('.toast');
         existing.forEach(function (t) { t.remove(); });
 
