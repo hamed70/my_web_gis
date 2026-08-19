@@ -25,6 +25,9 @@
                     <button id="btn-geolocate" class="btn btn-primary" title="یافتن موقعیت من">
                         <span class="btn-icon">◎</span> موقعیت من
                     </button>
+                    <button id="btn-cities" class="btn btn-outline" title="پرش به یک شهر">
+                        <span class="btn-icon">🏙</span> شهرها
+                    </button>
                     <button id="btn-export" class="btn btn-success" title="خروجی GeoJSON">
                         <span class="btn-icon">⇩</span> خروجی GeoJSON
                     </button>
@@ -35,6 +38,13 @@
                     <button id="btn-clear-all" class="btn btn-danger" title="حذف همه نقاط">
                         <span class="btn-icon">⨯</span> پاک کردن همه
                     </button>
+                </div>
+
+                <div id="cities-panel" class="cities-panel" hidden>
+                    <div class="section-title">
+                        <span>پرش به شهر</span>
+                    </div>
+                    <div id="cities-list" class="cities-list"></div>
                 </div>
 
                 <div class="sidebar-section layers-section">
@@ -52,7 +62,20 @@
                             <button id="cancel-add-layer" class="btn btn-ghost btn-sm">انصراف</button>
                         </div>
                     </div>
-                    <button id="btn-add-layer" class="btn btn-outline btn-sm btn-full">+ لایه جدید</button>
+
+                    <div id="share-layer-form" class="add-layer-form" hidden>
+                        <div class="section-hint share-hint">کدام لایه‌ها ارسال شوند؟</div>
+                        <div id="share-layer-checklist" class="share-layer-checklist"></div>
+                        <div class="add-layer-buttons">
+                            <button id="confirm-share-layer" class="btn btn-primary btn-sm">ارسال</button>
+                            <button id="cancel-share-layer" class="btn btn-ghost btn-sm">انصراف</button>
+                        </div>
+                    </div>
+
+                    <div class="layers-actions-row">
+                        <button id="btn-add-layer" class="btn btn-outline btn-sm">+ لایه جدید</button>
+                        <button id="btn-share-layer" class="btn btn-outline btn-sm">↗ ارسال لایه</button>
+                    </div>
                 </div>
 
                 <div class="sidebar-stats">
