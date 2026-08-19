@@ -22,6 +22,16 @@
         { id: 'friends', name: 'دوستان', color: '#4fb0c6', visible: true }
     ];
 
+    var CITIES = [
+        { name: 'مشهد', center: [59.6042, 36.2972], zoom: 12 },
+        { name: 'تهران', center: [51.3890, 35.6892], zoom: 11 },
+        { name: 'شیراز', center: [52.5311, 29.5918], zoom: 12 },
+        { name: 'نیویورک', center: [-74.0060, 40.7128], zoom: 11 },
+        { name: 'شیکاگو', center: [-87.6298, 41.8781], zoom: 11 }
+    ];
+
+    var MOBILE_BREAKPOINT = 768;
+
     // ===== State =====
     var markers = [];          // Array of marker data objects
     var layers = [];           // Array of layer definitions
@@ -37,6 +47,11 @@
         bindEvents();
         renderLayers();
         renderMarkerList();
+        renderCities();
+    }
+
+    function isMobileViewport() {
+        return window.innerWidth <= MOBILE_BREAKPOINT;
     }
 
     // ===== Map Initialization =====
@@ -142,6 +157,23 @@
                 handleAddLayer();
             }
         });
+
+        document.getElementById('btn-cities').addEventListener('click', function () {
+            var panel = document.getElementById('cities-panel');
+            panel.hidden = !panel.hidden;
+        });
+
+        document.getElementById('btn-share-layer').addEventListener('click', function () {
+            var form = document.getElementById('share-layer-form');
+            renderShareChecklist();
+            form.hidden = false;
+        });
+
+        document.getElementById('cancel-share-layer').addEventListener('click', function () {
+            document.getElementById('share-layer-form').hidden = true;
+        });
+
+        document.getElementById('confirm-share-layer').addEventListener('click', handleShareLayers);
     }
 
     function hideAddLayerForm() {
@@ -326,6 +358,129 @@
         });
     }
 
+    // ===== Cities =====
+    function renderCities() {
+        var container = document.getElementById('cities-list');
+        var html = '';
+        CITIES.forEach(function (c, index) {
+            html += '<button type="button" class="city-item" data-index="' + index + '">' +
+                '<span class="city-mark">◎</span> ' + escapeHtml(c.name) +
+                '</button>';
+        });
+        container.innerHTML = html;
+
+        var items = container.querySelectorAll('.city-item');
+        items.forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                var city = CITIES[parseInt(this.getAttribute('data-index'), 10)];
+                if (!city || !map) return;
+                map.flyTo({ center: city.center, zoom: city.zoom, duration: 1800 });
+                document.getElementById('cities-panel').hidden = true;
+                showToast('پرش به ' + city.name, 'success');
+            });
+        });
+    }
+
+    // ===== Share Layer(s) =====
+    function renderShareChecklist() {
+        var container = document.getElementById('share-layer-checklist');
+        var html = '';
+        layers.forEach(function (l) {
+            var count = markers.filter(function (m) { return m.layerId === l.id; }).length;
+            html += '<label class="share-layer-item" style="--layer-color:' + l.color + '">' +
+                '<input type="checkbox" class="share-layer-checkbox" value="' + l.id + '">' +
+                '<span class="layer-color-dot"></span>' +
+                '<span class="layer-name">' + escapeHtml(l.name) + '</span>' +
+                '<span class="layer-count">' + count + '</span>' +
+                '</label>';
+        });
+        container.innerHTML = html;
+    }
+
+    function buildGeoJSON(markerSubset) {
+        return {
+            type: 'FeatureCollection',
+            features: markerSubset.map(function (m) {
+                var layer = getLayerById(m.layerId);
+                return {
+                    type: 'Feature',
+                    geometry: { type: 'Point', coordinates: [m.lng, m.lat] },
+                    properties: {
+                        id: m.id,
+                        notes: m.notes,
+                        layerId: m.layerId,
+                        layerName: layer ? layer.name : '',
+                        layerColor: layer ? layer.color : FALLBACK_COLOR,
+                        createdAt: m.createdAt,
+                        createdAtDisplay: m.createdAtDisplay
+                    }
+                };
+            })
+        };
+    }
+
+    function downloadBlob(blob, fileName) {
+        var url = URL.createObjectURL(blob);
+        var link = document.createElement('a');
+        link.href = url;
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+    }
+
+    function handleShareLayers() {
+        var checked = document.querySelectorAll('.share-layer-checkbox:checked');
+        if (checked.length === 0) {
+            showToast('حداقل یک لایه را انتخاب کنید', 'error');
+            return;
+        }
+
+        var selectedIds = Array.prototype.map.call(checked, function (cb) { return cb.value; });
+        var subset = markers.filter(function (m) { return selectedIds.indexOf(m.layerId) > -1; });
+
+        if (subset.length === 0) {
+            showToast('این لایه‌ها نقطه‌ای ندارند', 'error');
+            return;
+        }
+
+        var layerNames = selectedIds.map(function (id) {
+            var l = getLayerById(id);
+            return l ? l.name : '';
+        }).join('، ');
+
+        var geojson = buildGeoJSON(subset);
+        var dataStr = JSON.stringify(geojson, null, 2);
+        var fileName = 'field_notes_' + layerNames.replace(/\s+/g, '_') + '_' + new Date().toISOString().slice(0, 10) + '.geojson';
+        var blob = new Blob([dataStr], { type: 'application/geo+json' });
+        var file = null;
+
+        try {
+            file = new File([blob], fileName, { type: 'application/geo+json' });
+        } catch (e) {
+            file = null;
+        }
+
+        document.getElementById('share-layer-form').hidden = true;
+
+        if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
+            navigator.share({
+                files: [file],
+                title: 'یادداشت میدانی',
+                text: 'نقاط لایه‌ی «' + layerNames + '»'
+            }).catch(function (err) {
+                if (err && err.name !== 'AbortError') {
+                    downloadBlob(blob, fileName);
+                    showToast('اشتراک‌گذاری ممکن نشد؛ فایل دانلود شد', 'error');
+                }
+            });
+        } else {
+            downloadBlob(blob, fileName);
+            showToast('مرورگر شما از اشتراک‌گذاری مستقیم پشتیبانی نمی‌کند؛ فایل «' + layerNames + '» دانلود شد', 'success');
+        }
+    }
+
     // ===== Marker Management =====
     function generateId() {
         return 'mk_' + Date.now() + '_' + Math.random().toString(36).substring(2, 8);
@@ -494,10 +649,18 @@
             }
         }, 50);
 
+        // On mobile the map is only the top ~54vh of the screen. Pad the
+        // bottom of the "usable" area before centering so the popup (which
+        // can be tall — notes + save/delete buttons) doesn't get clipped by
+        // the map container's edge / the coordinates overlay.
+        var mobile = isMobileViewport();
         map.flyTo({
             center: [data.lng, data.lat],
             zoom: Math.max(map.getZoom(), 14),
-            duration: 800
+            duration: 800,
+            padding: mobile
+                ? { top: 20, bottom: Math.min(260, Math.round(map.getContainer().clientHeight * 0.55)), left: 20, right: 20 }
+                : { top: 40, bottom: 40, left: 40, right: 40 }
         });
     }
 
@@ -739,37 +902,10 @@
             return;
         }
 
-        var geojson = {
-            type: 'FeatureCollection',
-            features: markers.map(function (m) {
-                var layer = getLayerById(m.layerId);
-                return {
-                    type: 'Feature',
-                    geometry: { type: 'Point', coordinates: [m.lng, m.lat] },
-                    properties: {
-                        id: m.id,
-                        notes: m.notes,
-                        layerId: m.layerId,
-                        layerName: layer ? layer.name : '',
-                        layerColor: layer ? layer.color : FALLBACK_COLOR,
-                        createdAt: m.createdAt,
-                        createdAtDisplay: m.createdAtDisplay
-                    }
-                };
-            })
-        };
-
+        var geojson = buildGeoJSON(markers);
         var dataStr = JSON.stringify(geojson, null, 2);
         var blob = new Blob([dataStr], { type: 'application/geo+json' });
-        var url = URL.createObjectURL(blob);
-
-        var link = document.createElement('a');
-        link.href = url;
-        link.download = 'field_notes_mashhad_' + new Date().toISOString().slice(0, 10) + '.geojson';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
+        downloadBlob(blob, 'field_notes_mashhad_' + new Date().toISOString().slice(0, 10) + '.geojson');
 
         showToast(markers.length + ' نقطه به صورت GeoJSON خروجی گرفته شد', 'success');
     }
